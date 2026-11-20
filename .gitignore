@@ -104,3 +104,4 @@ netgw/stack/logs/
 netgw/stack/state/
 netgw/services.json
 /wfc-server/
+*.pid
