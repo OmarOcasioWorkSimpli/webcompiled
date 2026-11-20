@@ -23,7 +23,7 @@ inputs:
   rel:
     path: Assets/StaticR.rel
     load_address: 0x805102E0
-    sha256: e233f07d3c2dfcbbcce929d5674a8de4991fa9ed05de502edc439f77c40183c9
+    sha256: ff333b17807c29ead349e5839f7a8756a0fb624abe0f028ca804d888a98fb113
 
 translation:
   entry_points:
