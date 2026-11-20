@@ -7,6 +7,10 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 LOCAL="$ROOT/.local"
 export PATH="$LOCAL/go/bin:$PATH" GOPATH="$LOCAL/gopath"
 PG="$LOCAL/pg/bin"; PGDATA="$LOCAL/pgdata"; PGPORT=54329
+# deployed server: no project-local Postgres, use the system one (Debian keeps it off PATH)
+if [ ! -x "$PG/pg_ctl" ]; then
+  PG="$(dirname "$(command -v pg_ctl || ls /usr/lib/postgresql/*/bin/pg_ctl 2>/dev/null | tail -1)")"
+fi
 LOGS="$HERE/logs"; mkdir -p "$LOGS"
 WFC_PID="$LOGS/wfc.pid"
 
@@ -16,6 +20,7 @@ wfc_up() { [ -f "$WFC_PID" ] && kill -0 "$(cat "$WFC_PID")" 2>/dev/null; }
 build() { (cd "$ROOT/wfc-server" && go build -o "$HERE/wfc-server-bin" .) ; }
 
 start() {
+  [ -d "$PGDATA" ] || "$PG/initdb" -D "$PGDATA" -A trust >/dev/null || exit 1
   if ! pg_up; then
     "$PG/pg_ctl" -D "$PGDATA" -l "$LOCAL/pg.log" -o "-p $PGPORT -k /tmp" -w start || exit 1
   fi
