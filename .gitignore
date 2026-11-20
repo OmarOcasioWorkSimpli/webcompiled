@@ -103,3 +103,4 @@ netgw/stack/wfc-server-bin
 netgw/stack/logs/
 netgw/stack/state/
 netgw/services.json
+/wfc-server/
