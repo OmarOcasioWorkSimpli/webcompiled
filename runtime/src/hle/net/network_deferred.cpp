@@ -122,6 +122,19 @@ struct DeferredConnectWork {
     std::optional<int32_t> initialResult;
 };
 
+#ifdef __EMSCRIPTEN__
+static constexpr uint32_t kSslReadCmd = 0x04;  // IOCTLV_NET_SSL_READ (enum is private to network_ssl.cpp)
+// ponytail: IOS SSL_Read blocks until data; the browser cannot block, so park the guest and re-run
+// the (non-blocking) read from the completion pump until it stops saying RAGAIN or 15 s pass.
+struct DeferredSslReadWork {
+    DeferredNetworkRoute route{};
+    NetworkPollContract::Timeout timeout{};
+    std::vector<IoVector> in;
+    std::vector<IoVector> out;
+};
+using DeferredSslReadPreparation = NetworkDeferredContract::Preparation<DeferredSslReadWork>;
+#endif
+
 using DeferredDnsPreparation =
     NetworkDeferredContract::Preparation<DeferredDnsWork>;
 using DeferredPollPreparation =
@@ -136,6 +149,9 @@ struct DeferredNetworkStore {
     // thread, so unlike DNS worker completions they need no cross-thread lock.
     std::vector<DeferredPollWork> pendingPolls;
     std::vector<DeferredConnectWork> pendingConnects;
+#ifdef __EMSCRIPTEN__
+    std::vector<DeferredSslReadWork> pendingSslReads;
+#endif
     std::mutex resultMutex;
     std::unordered_map<uint64_t, int32_t> syncResults;
     std::mutex schedulerThreadMutex;
@@ -200,6 +216,7 @@ static void QueueDeferredDnsCompletion(DeferredDnsCompletion completion) {
     store.completed.push_back(std::move(completion));
 }
 
+#ifndef __EMSCRIPTEN__
 static DeferredDnsCompletion ResolveDeferredDns(DeferredDnsWork work) {
     DeferredDnsCompletion completion{};
     completion.work = std::move(work);
@@ -321,6 +338,77 @@ static bool LaunchDeferredDns(DeferredDnsWork work) {
         });
     return true;
 }
+
+#else  // __EMSCRIPTEN__
+// Browsers have neither getaddrinfo nor threads: names resolve through the gateway (DNS_REQ), and the
+// answer is collected by PumpWebDns from the completion pump on the scheduler thread.
+struct PendingWebDns {
+    DeferredDnsWork work;
+    int id = 0;
+    std::chrono::steady_clock::time_point deadline;
+};
+static std::vector<PendingWebDns> g_webDns;
+constexpr auto kWebDnsTimeout = std::chrono::seconds(10);
+
+static bool LaunchDeferredDns(DeferredDnsWork work) {
+    const int id = WebNet::DnsStart(work.node);
+    if (!id) {
+        DeferredDnsCompletion failure{};
+        failure.work = std::move(work);
+        failure.result = DeferredDnsFailureResult(failure.work.kind);
+        NetFail("dns %s '%s' FAILED: no gateway connection", DeferredDnsKindName(failure.work.kind),
+                failure.work.node.c_str());
+        QueueDeferredDnsCompletion(std::move(failure));
+        return true;
+    }
+    g_webDns.push_back({std::move(work), id, std::chrono::steady_clock::now() + kWebDnsTimeout});
+    return true;
+}
+
+static void PumpWebDns() {
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = g_webDns.begin(); it != g_webDns.end();) {
+        uint32_t ip = 0;
+        int state = WebNet::DnsPoll(it->id, &ip);
+        if (state < 0 && now < it->deadline) {
+            ++it;
+            continue;
+        }
+        if (state < 0) {
+            WebNet::DnsCancel(it->id);
+            state = 0;
+        }
+        DeferredDnsCompletion completion{};
+        completion.work = std::move(it->work);
+        it = g_webDns.erase(it);
+        if (state == 1) {
+            sockaddr_in sin{};
+            sin.sin_family = AF_INET;
+            sin.sin_port = htons(static_cast<uint16_t>(std::atoi(completion.work.service.c_str())));
+            sin.sin_addr.s_addr = htonl(ip);
+            addrinfo native{};
+            native.ai_flags = completion.work.hintFlags;
+            native.ai_family = AF_INET;
+            native.ai_socktype = completion.work.hintSockType;
+            native.ai_protocol = completion.work.hintProtocol;
+            native.ai_addrlen = sizeof(sin);
+            native.ai_addr = reinterpret_cast<sockaddr*>(&sin);
+            if (auto address = NormalizeDeferredDnsAddress(native)) {
+                completion.addresses.push_back(*address);
+            }
+        }
+        completion.result = completion.addresses.empty()
+            ? DeferredDnsFailureResult(completion.work.kind)
+            : 0;
+        if (completion.result != 0) {
+            NetFail("dns %s '%s' FAILED (gateway: unknown name or timeout) result=%d",
+                    DeferredDnsKindName(completion.work.kind), completion.work.node.c_str(),
+                    completion.result);
+        }
+        QueueDeferredDnsCompletion(std::move(completion));
+    }
+}
+#endif
 
 // Every deferred operation is an /dev/net/ip/top command; anything else must
 // fall straight through to the direct path.
@@ -696,7 +784,7 @@ static bool InstallDeferredConnect(DeferredConnectWork work) {
     if (!DeferredConnectSocketIsStillValid(work)) {
         work.initialResult = -SO_EBADF;
     } else {
-        const int ret = connect(work.nativeFd, reinterpret_cast<sockaddr*>(&work.peerAddress),
+        const int ret = Sys::connect(work.nativeFd, reinterpret_cast<sockaddr*>(&work.peerAddress),
                                 sizeof(work.peerAddress));
         if (ret == 0) {
             work.initialResult = 0;
@@ -746,6 +834,43 @@ static std::optional<int32_t> ScalarDeferredFailureResult(uint32_t fd, uint32_t 
         return std::nullopt;
     }
 }
+
+#ifdef __EMSCRIPTEN__
+static bool SslReadWouldBlock(const std::vector<IoVector>& in) {
+    return !in.empty() && in[0].address && in[0].size >= 4 &&
+           static_cast<int32_t>(Memory::Read32(in[0].address)) == -2;  // SSL_ERR_RAGAIN
+}
+
+static DeferredSslReadPreparation PrepareDeferredSslRead(uint32_t fd, uint32_t cmd, uint32_t numIn,
+                                                         uint32_t numOut, uint32_t vectorPtr) {
+    if (cmd != kSslReadCmd) {
+        return DeferredSslReadPreparation::NotApplicable();
+    }
+    const auto kind = GetDeviceKind(fd);
+    if (!kind || *kind != DeviceKind::Ssl) {
+        return DeferredSslReadPreparation::NotApplicable();
+    }
+    const uint64_t count = static_cast<uint64_t>(numIn) + numOut;
+    if (count == 0 || count > 16 || !vectorPtr || !Memory::Contains(vectorPtr, count * 8u)) {
+        return DeferredSslReadPreparation::Error(-SO_EINVAL);
+    }
+    const std::vector<IoVector> v = ReadVectors(vectorPtr, static_cast<uint32_t>(count));
+    DeferredSslReadWork work{};
+    work.in.assign(v.begin(), v.begin() + numIn);
+    work.out.assign(v.begin() + numIn, v.end());
+    HandleSslIoctlv(cmd, work.in, work.out);  // first attempt now
+    if (!SslReadWouldBlock(work.in)) {
+        return DeferredSslReadPreparation::Error(0);  // already answered
+    }
+    work.timeout = NetworkPollContract::Timeout::FromMilliseconds(15000);
+    return DeferredSslReadPreparation::Ready(std::move(work), 0);
+}
+
+static bool InstallDeferredSslRead(DeferredSslReadWork work) {
+    GetDeferredNetworkStore().pendingSslReads.push_back(std::move(work));
+    return true;
+}
+#endif
 
 // Guest-input marshalling faults must never escape into the IOS bridge. Note
 // that the two failure results are NOT the same for the ioctlv entry points: a
@@ -799,6 +924,14 @@ NetworkDeferredContract::StartOutcome Network_HLE_StartIoctlSync(
 NetworkDeferredContract::StartOutcome Network_HLE_StartIoctlvSync(
     uint32_t fd, uint32_t cmd, uint32_t numIn, uint32_t numOut,
     uint32_t vectorPtr, uint32_t waitQueue) {
+#ifdef __EMSCRIPTEN__
+    if (cmd == kSslReadCmd) {
+        return RunDeferredEntry(-SO_EINVAL, -SO_EINVAL, [&] {
+            return StartDeferred(PrepareDeferredSslRead(fd, cmd, numIn, numOut, vectorPtr),
+                                 SyncRoute(waitQueue), InstallDeferredSslRead);
+        });
+    }
+#endif
     if (!IsIpTopCommand(fd, cmd, IOCTLV_SO_GETADDRINFO)) {
         return DeferredStartOutcome::NotApplicable();
     }
@@ -824,6 +957,14 @@ NetworkDeferredContract::StartOutcome Network_HLE_StartIoctlAsync(
 NetworkDeferredContract::StartOutcome Network_HLE_StartIoctlvAsync(
     uint32_t fd, uint32_t cmd, uint32_t numIn, uint32_t numOut,
     uint32_t vectorPtr, uint32_t callback, uint32_t callbackArg) {
+#ifdef __EMSCRIPTEN__
+    if (cmd == kSslReadCmd) {
+        return RunDeferredEntry(-SO_EINVAL, -SO_EINVAL, [&] {
+            return StartDeferred(PrepareDeferredSslRead(fd, cmd, numIn, numOut, vectorPtr),
+                                 AsyncRoute(callback, callbackArg), InstallDeferredSslRead);
+        });
+    }
+#endif
     if (!IsIpTopCommand(fd, cmd, IOCTLV_SO_GETADDRINFO)) {
         return DeferredStartOutcome::NotApplicable();
     }
@@ -959,6 +1100,9 @@ bool Network_HLE_ProcessCompletions(CpuContext* cpu) {
 
     std::deque<DeferredDnsCompletion> ready;
     DeferredNetworkStore& store = GetDeferredNetworkStore();
+#ifdef __EMSCRIPTEN__
+    PumpWebDns();
+#endif
     {
         std::lock_guard<std::mutex> lock(store.completedMutex);
         ready.swap(store.completed);
@@ -1066,5 +1210,24 @@ bool Network_HLE_ProcessCompletions(CpuContext* cpu) {
         DeliverDeferredNetworkResult(cpu, store, route, result);
         handledAny = true;
     }
+#ifdef __EMSCRIPTEN__
+    for (auto it = store.pendingSslReads.begin(); it != store.pendingSslReads.end();) {
+        DeferredSslReadWork& work = *it;
+        const DeferredNetworkRoute route = work.route;
+        if (route.kind == DeferredNetworkCompletionKind::SyncWaitQueue &&
+            !DeferredNetworkWaiterIsValid(route)) {
+            it = store.pendingSslReads.erase(it);
+            continue;
+        }
+        HandleSslIoctlv(kSslReadCmd, work.in, work.out);
+        if (SslReadWouldBlock(work.in) && !work.timeout.IsExpired(now)) {
+            ++it;
+            continue;
+        }
+        it = store.pendingSslReads.erase(it);
+        DeliverDeferredNetworkResult(cpu, store, route, 0);
+        handledAny = true;
+    }
+#endif
     return handledAny;
 }

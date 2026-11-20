@@ -82,7 +82,7 @@ presented and input events are delivered even when frames run late.
 | aurora pipeline compile workers + cache writer | compile synchronously; no sqlite cache (or IDBFS later) |
 | frame interpolation workers | interpolation disabled |
 | AX mix worker (`hle/audio/ax_mix.cpp`) | mix inline on the guest thread |
-| network deferred worker | networking disabled (no raw sockets in browsers) |
+| network deferred worker | replaced by WebSocket gateway networking (see netgw/README.md) |
 | music attenuation / discord / stdout transcript | compiled out |
 
 ### 5. Graphics → aurora on browser WebGPU
@@ -212,7 +212,7 @@ unless it says "local" (verified by the local session with the real game files).
 * JSPI `HostContext` + `web/js/library_mkw_host.js` (`mkw_host_context_switch`,
   `mkw_host_yield`).
 * aurora for Emscripten (see "aurora web notes").
-* Runtime: `MKW_PLATFORM_WEB` CMake path; networking always off (no TLS, no
+* Runtime: `MKW_PLATFORM_WEB` CMake path; networking via WebSocket gateway (netgw/) (no TLS, no
   sockets); Discord presence and TLS replaced by `src/platform/web/` stubs; AX
   mixing inline; no transcript threads; graphics API table `{"auto"}`; sleeps
   in VI pacing, GX frame retry and `GKI_delay` suspend through

@@ -1,0 +1,38 @@
+<Config>
+     <!-- LAN-only private stack. Everything binds loopback; the netgw gateway is the only front door. -->
+     <gsAddress>127.0.0.1</gsAddress>
+     <nasAddress>127.0.0.1</nasAddress>
+     <!-- 8080 is taken by the python static server -->
+     <nasPort>18080</nasPort>
+     <nasAddressHttps>127.0.0.1</nasAddressHttps>
+     <nasPortHttps>18443</nasPortHttps>
+     <enableHttps>false</enableHttps>
+     <enableHttpsExploitWii>false</enableHttpsExploitWii>
+     <enableHttpsExploitDS>false</enableHttpsExploitDS>
+
+     <!-- blank = built-in payload handler -->
+     <payloadServerAddress></payloadServerAddress>
+
+     <frontendAddress>127.0.0.1:29998</frontendAddress>
+     <frontendBackendAddress>127.0.0.1:29999</frontendBackendAddress>
+     <backendAddress>127.0.0.1:29999</backendAddress>
+     <backendFrontendAddress>127.0.0.1:29998</backendFrontendAddress>
+
+     <allowDefaultDolphinKeys>true</allowDefaultDolphinKeys>
+     <!-- local patch (see NOTES in stack/README or run.sh): skip wl:ver/wl:sig device auth for unpatched clients -->
+     <allowUnauthenticatedClients>true</allowUnauthenticatedClients>
+
+     <!-- Local Postgres, trust auth -->
+     <username>wfc</username>
+     <password>x</password>
+     <databaseAddress>127.0.0.1:54329</databaseAddress>
+     <databaseName>wwfc</databaseName>
+
+     <logLevel>4</logLevel>
+     <logOutput>StdOut</logOutput>
+     <apiSecret>local-lan-only-secret</apiSecret>
+
+     <eventReporting>
+          <logToDatabase>true</logToDatabase>
+     </eventReporting>
+</Config>

@@ -56,6 +56,12 @@
         <p id="status" class="status">Checking your browser…</p>
       </div>
 
+      <div id="net-area" class="net" hidden>
+        <label>Name <input id="net-name" maxlength="16" autocomplete="nickname" placeholder="Player"></label>
+        <label>Invite code <input id="net-code" maxlength="64" autocomplete="off" spellcheck="false" placeholder="optional, for online play"></label>
+        <p id="net-error" class="net-error" role="alert" hidden></p>
+      </div>
+
       <button type="button" id="btn-start" class="primary" hidden>Click to start</button>
       <p id="start-hint" class="hint" hidden>Audio and input begin after this click (browser autoplay policy).</p>
       <button type="button" id="btn-change-product" class="linklike" hidden>Choose a different game</button>
@@ -131,6 +137,7 @@
 
   <noscript><div class="overlay"><div class="panel"><h1>WebCompiled</h1><p>This page needs JavaScript, WebAssembly and WebGPU.</p></div></div></noscript>
 </main>
+<script src="net.js"></script>
 <script src="touch.js"></script>
 <script src="main.js"></script>
 </body>

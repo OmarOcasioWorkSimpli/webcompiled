@@ -32,6 +32,22 @@ addToLibrary({
       if (MkwHost.yieldQueue.length === 1) MkwHost.yieldChannel.port2.postMessage(0);
     },
 
+    // setTimeout for a guest sleep. A hidden tab clamps page timers to ~1/s, which starves the
+    // guest and gets an online player timed out of the room; a Worker's timers are not clamped.
+    sleep(ms, cb) {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') { setTimeout(cb, ms); return; }
+      let w = MkwHost.timerWorker;
+      if (!w) {
+        try {
+          w = MkwHost.timerWorker = new Worker(URL.createObjectURL(new Blob(
+            ['onmessage=e=>setTimeout(()=>postMessage(e.data[0]),e.data[1])'], { type: 'text/javascript' })));
+          w.cbs = new Map(); w.seq = 0;
+          w.onmessage = (e) => { const f = w.cbs.get(e.data); w.cbs.delete(e.data); if (f) f(); };
+        } catch (e) { MkwHost.timerWorker = null; setTimeout(cb, ms); return; }
+      }
+      const id = ++w.seq; w.cbs.set(id, cb); w.postMessage([id, ms]);
+    },
+
     startContext(handle) {
       // Promising export (JSPI_EXPORTS): runs until its first suspension and
       // returns a promise that only settles if the context faults.
@@ -67,15 +83,20 @@ addToLibrary({
   mkw_host_yield__deps: ['$MkwHost'],
   mkw_host_yield__async: true,
   mkw_host_yield: (ms) => new Promise((resolve) => {
-    if (ms >= 1) MkwHost.postYield(() => setTimeout(resolve, ms));
+    if (ms >= 1) MkwHost.postYield(() => MkwHost.sleep(ms, resolve));
     else MkwHost.postYield(resolve);
   }),
 
   // Page visibility. The runtime parks the whole guest (WebHost::WaitWhilePageHidden) while the
   // page is hidden: a background tab otherwise keeps simulating with no frames to show, burns a
   // core and overflows the audio queue. Module.mkwPaused / mkwParkCount expose the state.
-  mkw_host_page_hidden: () =>
-    (typeof document !== 'undefined' && document.visibilityState === 'hidden') ? 1 : 0,
+  // Not while the online link is open: a parked guest stops answering the room, so peers time the
+  // player out ("disconnected from the other players") on a mere alt-tab.
+  mkw_host_page_hidden: () => {
+    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') return 0;
+    const n = Module['mkwNet'];
+    return (n && n.open) ? 0 : 1;
+  },
 
   mkw_host_wait_visible__async: true,
   mkw_host_wait_visible: () => new Promise((resolve) => {

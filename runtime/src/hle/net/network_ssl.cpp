@@ -2,7 +2,7 @@
 #include "runtime_config.h"
 #include "runtime_log.h"
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)  // the browser build has no TLS: plaintext WFC only
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/error.h>
@@ -75,7 +75,7 @@ struct SslSession {
     CredHandle cred{};
     CtxtHandle context{};
     SecPkgContext_StreamSizes sizes{};
-#else
+#elif !defined(__EMSCRIPTEN__)
     bool haveSsl = false;
     mbedtls_ssl_context sslContext{};
     mbedtls_ssl_config sslConfig{};
@@ -88,8 +88,18 @@ static std::array<SslSession, kMaxSslSessions> g_sslSessions;
 // Logging wrapper around the platform handshake implementation; see below.
 static int32_t SslHandshake(SslSession& ssl);
 
+// Retro Rewind's server speaks plain HTTP for the HTTPS-only WFC hosts; the browser build always
+// does (it has no TLS and the gateway serves those ports as plain HTTP).
+static bool PlaintextWfcProfileActive() {
+#ifdef __EMSCRIPTEN__
+    return true;
+#else
+    return RetroRewindProfileActive();
+#endif
+}
+
 static bool IsRetroNasSslHost(std::string_view hostname) {
-    if (!RetroRewindProfileActive()) {
+    if (!PlaintextWfcProfileActive()) {
         return false;
     }
     const std::string lowered = Lower(hostname);
@@ -100,7 +110,7 @@ static bool IsRetroPlaintextSslHost(std::string_view hostname) {
     if (IsRetroNasSslHost(hostname)) {
         return true;
     }
-    if (!RetroRewindProfileActive()) {
+    if (!PlaintextWfcProfileActive()) {
         return false;
     }
 
@@ -562,6 +572,58 @@ static int32_t SslRead(SslSession& ssl, uint8_t* out, uint32_t size) {
     ssl.decrypted.erase(ssl.decrypted.begin(), ssl.decrypted.begin() + copied);
     return copied == 0 ? SSL_ERR_ZERO : static_cast<int32_t>(copied);
 }
+#elif defined(__EMSCRIPTEN__)
+// Browser: no TLS at all. Only plaintextWfc sessions (the WFC hosts, see IsRetroPlaintextSslHost)
+// work; anything else fails its handshake. Same plaintext read/write semantics as the native path
+// below, on the virtual sockets (always non-blocking, so an empty read is SSL_ERR_RAGAIN).
+static void ClearSslSession(SslSession& ssl) {
+    ssl = {};
+}
+
+static int32_t SslHandshakeImpl(SslSession& ssl) {
+    if (!ssl.plaintextWfc) {
+        return SSL_ERR_FAILED;
+    }
+    ssl.handshaked = true;
+    return SSL_OK;
+}
+
+static int32_t SslWrite(SslSession& ssl, const uint8_t* data, uint32_t size) {
+    if (!data || size == 0) {
+        return SSL_ERR_ZERO;
+    }
+    const int32_t handshakeRet = SslHandshake(ssl);
+    if (handshakeRet != SSL_OK) {
+        return handshakeRet;
+    }
+    uint32_t total = 0;
+    while (total < size) {
+        const ssize_t sent = Sys::send(ssl.native, data + total, size - total, 0);
+        if (sent <= 0) {
+            return SSL_ERR_SYSCALL;
+        }
+        total += static_cast<uint32_t>(sent);
+    }
+    return static_cast<int32_t>(total);
+}
+
+static int32_t SslRead(SslSession& ssl, uint8_t* out, uint32_t size) {
+    if (!out || size == 0) {
+        return SSL_ERR_ZERO;
+    }
+    const int32_t handshakeRet = SslHandshake(ssl);
+    if (handshakeRet != SSL_OK) {
+        return handshakeRet;
+    }
+    const ssize_t ret = Sys::recv(ssl.native, out, size, 0);
+    if (ret == 0) {
+        return SSL_ERR_ZERO;
+    }
+    if (ret < 0) {
+        return (errno == EAGAIN || errno == EWOULDBLOCK) ? SSL_ERR_RAGAIN : SSL_ERR_SYSCALL;
+    }
+    return static_cast<int32_t>(ret);
+}
 #else
 // Windows gets TLS for free from the OS (Schannel, above) - mbed TLS is this project's own
 // vendored equivalent for everywhere else (runtime/third_party/mbedtls, see runtime/CMakeLists.txt
@@ -921,6 +983,11 @@ int32_t HandleSslIoctlv(uint32_t cmd, const std::vector<IoVector>& in, const std
         ssl.plaintextWfc = false;
         socket->nonblocking = false;
         SetNonBlocking(socket->native, false);
+#ifdef __EMSCRIPTEN__
+        // No 443->80 reconnect here: it would have to block on the gateway round trip. The gateway
+        // serves 443 as plain HTTP (netgw/services.json), so the connected socket is used as is.
+        ssl.plaintextWfc = IsRetroPlaintextSslHost(ssl.hostname);
+#else
         if (IsRetroPlaintextSslHost(ssl.hostname) && socket->peerPort == 443) {
             const int32_t reroute = ReconnectWiiSocket(*socket, 80);
             if (reroute != 0) {
@@ -932,7 +999,10 @@ int32_t HandleSslIoctlv(uint32_t cmd, const std::vector<IoVector>& in, const std
             ssl.native = socket->native;
             ssl.plaintextWfc = true;
         }
-#ifdef _WIN32
+#endif
+#ifdef __EMSCRIPTEN__
+        // Virtual sockets have no socket timeouts; the guest's own SSL retry loop bounds waits.
+#elif defined(_WIN32)
         const int timeoutMs = 15000;
         setsockopt(socket->native, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
         setsockopt(socket->native, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
@@ -1010,7 +1080,8 @@ int32_t HandleSslIoctlv(uint32_t cmd, const std::vector<IoVector>& in, const std
         auto* data = Memory::GetPointer(in[1].address, in[1].size);
         SslSession& readSession = g_sslSessions[sslId];
         const int32_t result = SslRead(readSession, data, in[1].size);
-        if (result < 0 && result != SSL_ERR_RAGAIN && result != readSession.lastLoggedReadError) {
+        if (result < 0 && result != SSL_ERR_RAGAIN && result != SSL_ERR_ZERO /* clean close, not a failure */ &&
+            result != readSession.lastLoggedReadError) {
             readSession.lastLoggedReadError = result;
             NetFail("SSL_READ host=%s FAILED ssl_err=%d%s",
                     readSession.hostname.empty() ? "?" : readSession.hostname.c_str(), result,

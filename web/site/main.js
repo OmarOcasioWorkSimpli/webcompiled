@@ -166,6 +166,10 @@
     status: $('status'),
     start: $('btn-start'),
     startHint: $('start-hint'),
+    netArea: $('net-area'),
+    netName: $('net-name'),
+    netCode: $('net-code'),
+    netError: $('net-error'),
     productArea: $('product-area'),
     productList: $('product-list'),
     changeProduct: $('btn-change-product'),
@@ -1062,7 +1066,47 @@
     });
   }
 
+  // Private online play: device id + name + invite code live in localStorage; ?name=&code= also work.
+  function deviceId() {
+    let id = storageGet('mkw.dev');
+    if (!/^[0-9a-f]{16}$/.test(id || '')) {
+      id = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
+      storageSet('mkw.dev', id);
+    }
+    return id;
+  }
+  (function initNetFields() {
+    const q = new URLSearchParams(location.search);
+    el.netName.value = q.get('name') || storageGet('mkw.name') || '';
+    el.netCode.value = q.get('code') || storageGet('mkw.code') || '';
+    for (const i of [el.netName, el.netCode]) i.addEventListener('keydown', (ev) => ev.stopPropagation());
+  })();
+
+  /** Connect to the gateway before launch (only when a code is given). Returns false on refusal. */
+  async function connectGateway() {
+    const name = el.netName.value.trim(), code = el.netCode.value.trim();
+    storageSet('mkw.name', name); storageSet('mkw.code', code);
+    el.netError.hidden = true;
+    if (!code || !window.MkwNet) return true; // offline play, unchanged
+    const gw = new MkwNet.Gateway();
+    try {
+      const hello = await gw.connect(MkwNet.gatewayUrl(location, deviceId(), name || 'Player', code));
+      Module.mkwNet = gw;
+      // A page left in the back/forward cache keeps its socket open and blocks this device's next join (409).
+      addEventListener('pagehide', () => gw.close());
+      addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
+      Module.preRun = [function () { if (hello.serno) Module.ENV.MKW_NET_SERNO = String(hello.serno); }];
+      return true;
+    } catch (e) {
+      el.netError.textContent = 'Online play refused: the invite code was rejected, revoked, or this device is already connected. Clear the code to play offline.';
+      el.netError.hidden = false;
+      return false;
+    }
+  }
+
   async function start() {
+    if (!(await connectGateway())) return;
+    el.netArea.hidden = true;
     el.start.hidden = true;
     el.changeProduct.hidden = true;
     el.startHint.hidden = true;
@@ -1109,6 +1153,7 @@
     setPhase('ready');
     el.progressArea.hidden = false;
     setStatus('Ready (' + mib(wasmBinary.byteLength) + ' downloaded).');
+    el.netArea.hidden = false;
     el.start.hidden = false;
     el.startHint.hidden = false;
     el.start.focus();

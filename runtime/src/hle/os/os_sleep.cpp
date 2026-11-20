@@ -349,26 +349,22 @@ void ReportUnparkableSleep(uint32_t queuePtr, uint32_t thread)
     // thread_local rather than static: guest scheduling normally runs on one
     // host thread, but this is reachable from the host frame loop too and a
     // diagnostic must not be the thing that introduces a data race.
-    thread_local std::unordered_set<uint32_t> reportedQueues;
     thread_local uint32_t wedgedQueue = 0;
     thread_local Clock::time_point wedgedSince{};
     thread_local bool escalated = false;
 
     const uint32_t disableCount = ::Memory::Read32(kSchedulerIdleFlagAddr);
 
-    if (reportedQueues.insert(queuePtr).second) {
-        RT_LOG(RT_TAG_OS) << "OSSleepThread: thread 0x" << std::hex << thread
-                  << " tried to block on wait queue 0x" << queuePtr
-                  << std::dec << " but the scheduler could not switch away";
-        if (disableCount != 0) {
-            std::cerr << " (OSDisableScheduler nesting count " << disableCount << ")";
-        }
-        std::cerr << ". Not parking - the caller retries instead of corrupting"
-                     " the wait queue." << std::endl;
-    }
+    // A single failed switch is a benign retry (it resolves on the next call); only a wedge that
+    // persists is reported, below.
 
     const auto now = Clock::now();
-    if (queuePtr != wedgedQueue) {
+    // A wedge is one unbroken run of retries: a gap means the wait was satisfied in between, so a
+    // later retry on the same (reused) queue starts a fresh timer instead of reporting "561s".
+    thread_local Clock::time_point lastSeen{};
+    const bool stale = now - lastSeen > std::chrono::seconds(1);
+    lastSeen = now;
+    if (queuePtr != wedgedQueue || stale) {
         wedgedQueue = queuePtr;
         wedgedSince = now;
         escalated = false;

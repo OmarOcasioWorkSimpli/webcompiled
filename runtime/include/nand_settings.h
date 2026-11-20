@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <ctime>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -163,7 +164,18 @@ inline bool Ensure(const std::filesystem::path& root, std::string& error,
         return false;
     }
 
-    const auto bytes = EncodeNew(GenerateSerial(now));
+    std::string serial = GenerateSerial(now);
+#ifdef __EMSCRIPTEN__
+    // The page exports the serial the gateway derived for this browser (MKW_NET_SERNO, only when it
+    // is a valid 9-digit one). An existing setting.txt in the persisted NAND still wins, above.
+    if (const char* gateway = std::getenv("MKW_NET_SERNO")) {
+        const std::string candidate = gateway;
+        if (HasIdentity({{"SERNO", candidate}, {"CODE", "LEH"}, {"AREA", "EUR"}, {"GAME", "EU"}})) {
+            serial = candidate;
+        }
+    }
+#endif
+    const auto bytes = EncodeNew(serial);
     if (!bytes) {
         error = "Cannot initialize NAND settings: invalid system clock";
         return false;
