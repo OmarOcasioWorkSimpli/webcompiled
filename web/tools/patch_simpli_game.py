@@ -16,6 +16,18 @@ PATCHES = [  # (addr, original word, new word, why)
     (0x805394FC, 0x38C00E10, 0x38C0FFFF, 'battle idle limit B -> never'),
     (0x8053EF78, 0x28000E10, 0x2800FFFF, 'race AFK: kart stationary >3600 frames -> never (cmplwi r0,0xffff)'),
     (0x80647958, 0x3860008B, 0x3860008C, 'WFCConnect::GetNextPage: skip WFCMainMenu (0x8b), go to mode select (0x8c)'),
+    (0x8054FB2C, 0x9421FFD0, 0x38600001, 'unlock all: IsVehicleTypeUnlocked -> li r3,1'),
+    (0x8054FB30, 0x7C0802A6, 0x4E800020, 'unlock all: IsVehicleTypeUnlocked -> blr'),
+    (0x8054FC44, 0x9421FFA0, 0x38600001, 'unlock all: IsCupUnlocked -> li r3,1'),
+    (0x8054FC48, 0x7C0802A6, 0x4E800020, 'unlock all: IsCupUnlocked -> blr'),
+    (0x8054FED8, 0x9421FFB0, 0x38600001, 'unlock all: IsCharacterUnlocked -> li r3,1'),
+    (0x8054FEDC, 0x7C0802A6, 0x4E800020, 'unlock all: IsCharacterUnlocked -> blr'),
+    (0x805500CC, 0x9421FFD0, 0x38600001, 'unlock all: IsKartUnlocked -> li r3,1'),
+    (0x805500D0, 0x7C0802A6, 0x4E800020, 'unlock all: IsKartUnlocked -> blr'),
+    (0x80550468, 0x9421FF70, 0x38600001, 'unlock all: isFastStaffGhostUnlocked -> li r3,1'),
+    (0x8055046C, 0x7C0802A6, 0x4E800020, 'unlock all: isFastStaffGhostUnlocked -> blr'),
+    (0x8081CFB4, 0x2C040001, 0x38600001, 'unlock all: IsKartUnlocked(menu) -> li r3,1'),
+    (0x8081CFB8, 0x4182002C, 0x4E800020, 'unlock all: IsKartUnlocked(menu) -> blr'),
 ]
 
 def main(assets, yml):

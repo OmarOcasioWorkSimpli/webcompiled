@@ -35,4 +35,4 @@ Wii client log in and matchmake. Required: the browser client has no `wl:sig`.
 
 ## Game patches (run by `web/build.sh`)
 `web/tools/patch_simpli_ui.py` renames Nintendo Wi-Fi strings to SimpliConnection in `Scene/UI/*.szs`.
-`web/tools/patch_simpli_game.py` patches staged StaticR.rel (no idle drop, skip WFCMainMenu). Both idempotent.
+`web/tools/patch_simpli_game.py` patches staged StaticR.rel (no idle drop, skip WFCMainMenu, unlock all characters/karts/cups/ghosts). Both idempotent.
