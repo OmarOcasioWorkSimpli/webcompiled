@@ -423,3 +423,8 @@ kbd {
   color: var(--text);
   font: inherit;
 }
+
+.net { display: grid; gap: 8px; margin: 12px 0; text-align: left; }
+.net label { display: grid; gap: 4px; font-size: 14px; }
+.net input { padding: 8px; border-radius: 6px; border: 1px solid #556; background: #111; color: inherit; }
+.net-error { color: #ff8a80; margin: 0; }

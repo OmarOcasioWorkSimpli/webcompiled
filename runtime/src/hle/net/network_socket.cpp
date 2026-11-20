@@ -11,7 +11,7 @@ static int32_t NewWiiSocket(uint32_t af, uint32_t type, uint32_t protocol) {
     if (nativeAf < 0 || nativeType < 0) {
         return -SO_EINVAL;
     }
-    NativeSocket s = ::socket(nativeAf, nativeType, protocol);
+    NativeSocket s = Sys::socket(nativeAf, nativeType, protocol);
     const int hostError = s == kInvalidSocket ? NativeLastError() : 0;
     const int32_t wiiFd = AddWiiSocket(s, nativeAf, nativeType, static_cast<int>(protocol));
     if (wiiFd < 0) {
@@ -101,13 +101,19 @@ static int MapSockOptName(uint32_t optname) {
 }
 
 static in_addr ResolveDefaultInterfaceIp() {
+#ifdef __EMSCRIPTEN__
+    // The virtual address the gateway assigned (10.77.0.2 until the hello arrives).
+    in_addr virtualIp{};
+    virtualIp.s_addr = htonl(WebNet::GetHello().vip);
+    return virtualIp;
+#endif
     in_addr fallback{};
     fallback.s_addr = inet_addr("10.0.1.30");
     if (!EnsureSocketRuntime()) {
         return fallback;
     }
 
-    NativeSocket s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    NativeSocket s = Sys::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == kInvalidSocket) {
         return fallback;
     }
@@ -116,11 +122,11 @@ static in_addr ResolveDefaultInterfaceIp() {
     remote.sin_family = AF_INET;
     remote.sin_addr.s_addr = inet_addr("8.8.8.8");
     remote.sin_port = htons(53);
-    connect(s, reinterpret_cast<const sockaddr*>(&remote), sizeof(remote));
+    Sys::connect(s, reinterpret_cast<const sockaddr*>(&remote), sizeof(remote));
 
     sockaddr_in local{};
     socklen_t len = sizeof(local);
-    if (getsockname(s, reinterpret_cast<sockaddr*>(&local), &len) != 0) {
+    if (Sys::getsockname(s, reinterpret_cast<sockaddr*>(&local), &len) != 0) {
         CloseNativeSocket(s);
         return fallback;
     }
@@ -177,8 +183,8 @@ int32_t HandleIpTopIoctl(uint32_t cmd, uint32_t inBuf, uint32_t inLen, uint32_t 
         }
         sockaddr_in addr = ReadWiiSockAddr(inBuf + 8);
         const int ret = (cmd == IOCTL_SO_BIND)
-            ? bind(s->native, reinterpret_cast<sockaddr*>(&addr), sizeof(addr))
-            : connect(s->native, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+            ? Sys::bind(s->native, reinterpret_cast<sockaddr*>(&addr), sizeof(addr))
+            : Sys::connect(s->native, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
         int32_t result = 0;
         if (cmd == IOCTL_SO_CONNECT && ret < 0) {
             // Nonblocking connects only (blocking ones go through
@@ -219,8 +225,8 @@ int32_t HandleIpTopIoctl(uint32_t cmd, uint32_t inBuf, uint32_t inLen, uint32_t 
         sockaddr_in addr{};
         socklen_t len = sizeof(addr);
         const int ret = (cmd == IOCTL_SO_GETSOCKNAME)
-            ? getsockname(s->native, reinterpret_cast<sockaddr*>(&addr), &len)
-            : getpeername(s->native, reinterpret_cast<sockaddr*>(&addr), &len);
+            ? Sys::getsockname(s->native, reinterpret_cast<sockaddr*>(&addr), &len)
+            : Sys::getpeername(s->native, reinterpret_cast<sockaddr*>(&addr), &len);
         if (ret == 0) {
             WriteWiiSockAddr(outBuf, addr, static_cast<uint32_t>(len));
         }
@@ -234,7 +240,7 @@ int32_t HandleIpTopIoctl(uint32_t cmd, uint32_t inBuf, uint32_t inLen, uint32_t 
         const int optname = MapSockOptName(Memory::Read32(outBuf + 8));
         int value = 0;
         socklen_t valueLen = sizeof(value);
-        const int ret = getsockopt(s->native, level, optname, reinterpret_cast<char*>(&value), &valueLen);
+        const int ret = Sys::getsockopt(s->native, level, optname, reinterpret_cast<char*>(&value), &valueLen);
         Memory::Write32(outBuf + 0x0C, static_cast<uint32_t>(valueLen));
         Memory::Write32(outBuf + 0x10, static_cast<uint32_t>(value));
         return SocketResult(ret, false);
@@ -247,7 +253,7 @@ int32_t HandleIpTopIoctl(uint32_t cmd, uint32_t inBuf, uint32_t inLen, uint32_t 
         const int optname = MapSockOptName(Memory::Read32(inBuf + 8));
         const uint32_t optLen = std::min<uint32_t>(Memory::Read32(inBuf + 0x0C), inLen - 0x10);
         const char* optVal = reinterpret_cast<const char*>(Memory::GetPointer(inBuf + 0x10, optLen));
-        return SocketResult(setsockopt(s->native, level, optname, optVal, static_cast<int>(optLen)), false);
+        return SocketResult(Sys::setsockopt(s->native, level, optname, optVal, static_cast<int>(optLen)), false);
     }
     case IOCTL_SO_LISTEN: {
         if (!inBuf || inLen < 8) return -SO_EINVAL;
@@ -255,7 +261,7 @@ int32_t HandleIpTopIoctl(uint32_t cmd, uint32_t inBuf, uint32_t inLen, uint32_t 
         if (!s) {
             return -SO_EBADF;
         }
-        return SocketResult(listen(s->native, static_cast<int>(Memory::Read32(inBuf + 4))), false);
+        return SocketResult(Sys::listen(s->native, static_cast<int>(Memory::Read32(inBuf + 4))), false);
     }
     case IOCTL_SO_SHUTDOWN: {
         // Dolphin: WiiSocket::Shutdown (IOS/Network/Socket.cpp:164-212).
@@ -270,7 +276,7 @@ int32_t HandleIpTopIoctl(uint32_t cmd, uint32_t inBuf, uint32_t inLen, uint32_t 
 
         int socketType = 0;
         socklen_t socketTypeLen = sizeof(socketType);
-        if (getsockopt(s->native, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&socketType),
+        if (Sys::getsockopt(s->native, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&socketType),
                        &socketTypeLen) != 0 ||
             (socketType != SOCK_STREAM && socketType != SOCK_DGRAM)) {
             return -SO_EBADF;
@@ -283,7 +289,7 @@ int32_t HandleIpTopIoctl(uint32_t cmd, uint32_t inBuf, uint32_t inLen, uint32_t 
             return SO_SUCCESS;
         }
 
-        const int32_t result = SocketResult(shutdown(s->native, static_cast<int>(how)), false);
+        const int32_t result = SocketResult(Sys::shutdown(s->native, static_cast<int>(how)), false);
         if (how == 1 || how == 2) {
             // Dolphin aborts a pending blocking connect with -SO_ENETUNREACH
             // when the write half is shut down.
@@ -353,6 +359,14 @@ static int32_t HandleGetInterfaceOpt(const std::vector<IoVector>& in, const std:
 
     switch (opt) {
     case 0xb003:
+#ifdef __EMSCRIPTEN__
+        // DNS server: the gateway answers every lookup itself (DNS_REQ).
+        Memory::Write32(out[0].address, WebNet::GetHello().gw);
+        if (out[0].size >= 8) {
+            Memory::Write32(out[0].address + 4, WebNet::GetHello().gw);
+        }
+        return 0;
+#endif
         Memory::Write32(out[0].address, 0x08080808);
         if (out[0].size >= 8) {
             Memory::Write32(out[0].address + 4, 0x08080404);
@@ -382,8 +396,13 @@ static int32_t HandleGetInterfaceOpt(const std::vector<IoVector>& in, const std:
         const uint32_t hostOrderIp = ntohl(ResolveDefaultInterfaceIp().s_addr);
         Memory::Write32(out[0].address, hostOrderIp);
         if (out[0].size >= 12) {
-            Memory::Write32(out[0].address + 4, 0xFFFFFF00);
-            Memory::Write32(out[0].address + 8, (hostOrderIp & 0xFFFFFF00) | 0xFF);
+#ifdef __EMSCRIPTEN__
+            constexpr uint32_t kNetmask = 0xFFFF0000;  // 10.77.0.0/16
+#else
+            constexpr uint32_t kNetmask = 0xFFFFFF00;
+#endif
+            Memory::Write32(out[0].address + 4, kNetmask);
+            Memory::Write32(out[0].address + 8, (hostOrderIp & kNetmask) | ~kNetmask);
         }
         return 0;
     }
@@ -464,7 +483,7 @@ int32_t HandleIpTopIoctlv(uint32_t cmd, const std::vector<IoVector>& in, const s
         const bool patchedWrite = nasAction == NasSslWriteAction::Ready;
         const uint8_t* sendData = patchedWrite ? patched.data() : data;
         const uint32_t sendSize = patchedWrite ? static_cast<uint32_t>(patched.size()) : in[0].size;
-        const int ret = sendto(s->native, reinterpret_cast<const char*>(sendData), static_cast<int>(sendSize),
+        const int ret = Sys::sendto(s->native, reinterpret_cast<const char*>(sendData), static_cast<int>(sendSize),
                                static_cast<int>(flags), destPtr, destLen);
         const int hostError = ret < 0 ? NativeLastError() : 0;
         // Diagnostics may change the native error; use the send result captured above.
@@ -494,7 +513,7 @@ int32_t HandleIpTopIoctlv(uint32_t cmd, const std::vector<IoVector>& in, const s
         sockaddr* fromPtr = out.size() > 1 && out[1].address && out[1].size >= 8 ? reinterpret_cast<sockaddr*>(&from) : nullptr;
         int ret = 0;
 
-        ret = recvfrom(s->native, data, static_cast<int>(out[0].size), static_cast<int>(flags), fromPtr,
+        ret = Sys::recvfrom(s->native, data, static_cast<int>(out[0].size), static_cast<int>(flags), fromPtr,
                        fromPtr ? &fromLen : nullptr);
         int nativeErr = ret < 0 ? NativeLastError() : 0;
         // Nonblocking sockets get -SO_EAGAIN immediately (Dolphin's retry predicate
@@ -505,7 +524,7 @@ int32_t HandleIpTopIoctlv(uint32_t cmd, const std::vector<IoVector>& in, const s
         const bool waited = ret < 0 && !fromPtr && s->type == SOCK_STREAM &&
             IsWouldBlockError(nativeErr) && WaitForReadable(s->native, streamWaitMs);
         if (waited) {
-            ret = recvfrom(s->native, data, static_cast<int>(out[0].size), static_cast<int>(flags), nullptr,
+            ret = Sys::recvfrom(s->native, data, static_cast<int>(out[0].size), static_cast<int>(flags), nullptr,
                            nullptr);
             // WaitForReadable also returns true for POLLERR/POLLHUP, so the retry
             // is where a reset connection surfaces; the first call's would-block

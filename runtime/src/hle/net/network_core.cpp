@@ -19,6 +19,12 @@ const std::array<uint8_t, 6>& RuntimeMacAddress() {
 }
 
 uint64_t RuntimeGeneratedUserId() {
+#ifdef __EMSCRIPTEN__
+    // Per-browser id from the gateway hello; offline falls back to the old constant.
+    if (WebNet::GetHello().userId) {
+        return WebNet::GetHello().userId;
+    }
+#endif
     return 0x000000014D4B5752ull;
 }
 
@@ -310,7 +316,12 @@ int ProbeConnectSettled(NativeSocket socket, int timeoutMs) {
     pollfd descriptor{};
     descriptor.fd = socket;
     descriptor.events = POLLOUT;
+#ifdef __EMSCRIPTEN__
+    (void)timeoutMs;  // virtual sockets never block: the gateway answer arrives between frames
+    const int ret = WebNet::Poll(&descriptor, 1);
+#else
     const int ret = poll(&descriptor, 1, timeoutMs);
+#endif
     if (ret <= 0) {
         return ret;
     }
@@ -324,7 +335,7 @@ int ProbeConnectSettled(NativeSocket socket, int timeoutMs) {
 int32_t ClassifySettledConnect(NativeSocket socket) {
     int socketError = 0;
     socklen_t socketErrorLen = sizeof(socketError);
-    if (getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&socketError),
+    if (Sys::getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&socketError),
                    &socketErrorLen) != 0) {
         return TranslateSocketError(NativeLastError(), false);
     }
@@ -334,7 +345,7 @@ int32_t ClassifySettledConnect(NativeSocket socket) {
 
     sockaddr_in peer{};
     socklen_t peerLen = sizeof(peer);
-    if (getpeername(socket, reinterpret_cast<sockaddr*>(&peer), &peerLen) != 0) {
+    if (Sys::getpeername(socket, reinterpret_cast<sockaddr*>(&peer), &peerLen) != 0) {
         return TranslateSocketError(NativeLastError(), false);
     }
     return 0;
@@ -362,6 +373,8 @@ bool WaitForReadable(NativeSocket socket, int timeoutMs) {
     pfd.events = POLLRDNORM;
 #ifdef _WIN32
     const int ret = WSAPoll(&pfd, 1, timeoutMs);
+#elif defined(__EMSCRIPTEN__)
+    const int ret = WebNet::Poll(&pfd, 1);  // queue check only: never wait on the emulation thread
 #else
     const int ret = poll(&pfd, 1, timeoutMs);
 #endif
@@ -374,13 +387,18 @@ void CloseNativeSocket(NativeSocket socket) {
     }
 #ifdef _WIN32
     closesocket(socket);
+#elif defined(__EMSCRIPTEN__)
+    Sys::close(socket);
 #else
     close(socket);
 #endif
 }
 
 void SetNonBlocking(NativeSocket socket, bool enabled) {
-#ifdef _WIN32
+#ifdef __EMSCRIPTEN__
+    (void)socket;  // virtual sockets are always non-blocking
+    (void)enabled;
+#elif defined(_WIN32)
     u_long mode = enabled ? 1 : 0;
     ioctlsocket(socket, FIONBIO, &mode);
 #else
@@ -419,7 +437,7 @@ int32_t ReconnectWiiSocket(WiiSocket& socket, uint16_t port) {
         return -SO_EINVAL;
     }
 
-    NativeSocket native = ::socket(socket.af, socket.type, socket.protocol);
+    NativeSocket native = Sys::socket(socket.af, socket.type, socket.protocol);
     if (native == kInvalidSocket) {
         return SocketResult(-1, false);
     }
@@ -428,7 +446,7 @@ int32_t ReconnectWiiSocket(WiiSocket& socket, uint16_t port) {
     SetNonBlocking(native, true);
     sockaddr_in addr = socket.peerAddr;
     addr.sin_port = htons(port);
-    const int ret = connect(native, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    const int ret = Sys::connect(native, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
     const int nativeErr = ret < 0 ? NormalizeConnectError(NativeLastError()) : 0;
     int32_t result = 0;
     if (ret < 0 && IsWouldBlockError(nativeErr)) {
@@ -565,7 +583,7 @@ int32_t AddWiiSocket(NativeSocket native, int af, int type, int protocol) {
                 // Without this a sendto() to a broadcast address fails with
                 // EACCES/WSAEACCES on the host but succeeds on hardware.
                 const int enableBroadcast = 1;
-                setsockopt(native, SOL_SOCKET, SO_BROADCAST,
+                Sys::setsockopt(native, SOL_SOCKET, SO_BROADCAST,
                            reinterpret_cast<const char*>(&enableBroadcast),
                            sizeof(enableBroadcast));
             }
@@ -651,6 +669,18 @@ extern "C" int32_t Network_HLE_OpenDevice(const char* path, uint32_t mode) {
     const bool isIpTop = std::strcmp(path, "/dev/net/ip/top") == 0;
     const bool isSsl = std::strcmp(path, "/dev/net/ssl") == 0;
     // KD and NCD provide local identity/configuration services even offline.
+#ifdef __EMSCRIPTEN__
+    // No gateway hello (no invite code / gateway unreachable) = offline play, exactly as before:
+    // the guest sees no network device and the Wi-Fi menu fails.
+    if ((isIpTop || isSsl) && !WebNet::Online()) {
+        static bool reportedOffline = false;
+        if (!reportedOffline) {
+            reportedOffline = true;
+            NetFail("no gateway connection; online play is unavailable");
+        }
+        return 0;
+    }
+#endif
     if ((isIpTop || isSsl) && !RuntimeConfigFile::NetworkEnabled(true)) {
         static bool reported = false;
         if (!reported) {

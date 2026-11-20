@@ -93,3 +93,13 @@ __pycache__/
 /web/.certs/
 *.pem
 *.key
+
+# local dev toolchain and private online-mode runtime state
+/.local/
+netgw/gw/netgw-bin
+netgw/gw/gw.log
+netgw/gw/state/
+netgw/stack/wfc-server-bin
+netgw/stack/logs/
+netgw/stack/state/
+netgw/services.json

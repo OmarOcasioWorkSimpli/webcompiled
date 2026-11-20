@@ -186,7 +186,8 @@ endif()
 # and would also add a dependency Windows never links.
 add_library(mkw_mbedtls INTERFACE)
 add_library(mkw::mbedtls ALIAS mkw_mbedtls)
-# The browser has no raw sockets, so the web build compiles guest networking out and needs no TLS.
+# The browser has no raw sockets and no TLS: the web build reaches the private gateway over a WebSocket
+# (src/platform/web/web_net.cpp) and speaks plaintext to the WFC hosts, so it never links mbed TLS.
 if(NOT MKW_PLATFORM_WINDOWS AND NOT MKW_PLATFORM_WEB)
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/MbedTLSPin.cmake")
     if(NOT MKW_NATIVE_PREBUILT_DIR)
@@ -363,7 +364,6 @@ if(MKW_PLATFORM_WEB)
     list(REMOVE_ITEM SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory_macos.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/src/hle/net/network_ssl.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/src/discord_presence.cpp")
 else()
     list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory_wasm.cpp")

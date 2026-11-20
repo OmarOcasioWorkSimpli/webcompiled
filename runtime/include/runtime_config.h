@@ -966,13 +966,9 @@ inline std::string DisplayMode(std::string fallback = "windowed") {
 }
 
 inline bool NetworkEnabled(bool fallback = true) {
-#if defined(__EMSCRIPTEN__)
-    // Browsers have no raw sockets: the web build always runs offline.
-    (void)fallback;
-    return false;
-#else
+    // The web build is online only through the gateway: Network_HLE_OpenDevice hides the network
+    // devices until the page has connected (see hle/net/network_core.cpp), so offline play is unchanged.
     return Get().networkEnabled.value_or(fallback);
-#endif
 }
 
 inline std::string NandRoot(std::string fallback = "") {

@@ -14,6 +14,12 @@
 #include <sys/socket.h>
 #endif
 
+#ifdef __EMSCRIPTEN__
+namespace WebNet {
+int Poll(pollfd* fds, size_t count);  // platform/web/web_net.cpp: the browser's sockets are virtual
+}
+#endif
+
 namespace NetworkPollContract {
 
 constexpr size_t kMaxDescriptors = 24;
@@ -146,6 +152,8 @@ int ProbeNow(std::vector<CopiedDescriptor>& descriptors, IsStillValid&& isStillV
 
 #ifdef _WIN32
     const int result = WSAPoll(active.data(), static_cast<ULONG>(activeCount), 0);
+#elif defined(__EMSCRIPTEN__)
+    const int result = WebNet::Poll(active.data(), activeCount);
 #else
     const int result = poll(active.data(), activeCount, 0);
 #endif

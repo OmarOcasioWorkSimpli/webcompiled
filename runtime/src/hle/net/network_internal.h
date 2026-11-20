@@ -58,6 +58,25 @@
 #include <unistd.h>
 #endif
 
+#ifdef __EMSCRIPTEN__
+#include "platform/web/web_net.h"  // namespace Sys = WebNet: virtual sockets over the gateway
+#else
+// The host socket calls the HLE makes, re-exported so the web build can swap them (see above).
+namespace Sys {
+using ::bind;
+using ::connect;
+using ::getpeername;
+using ::getsockname;
+using ::getsockopt;
+using ::listen;
+using ::recvfrom;
+using ::sendto;
+using ::setsockopt;
+using ::shutdown;
+using ::socket;
+}  // namespace Sys
+#endif
+
 namespace NetworkHle {
 
 enum class DeviceKind {

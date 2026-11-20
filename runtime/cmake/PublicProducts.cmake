@@ -215,7 +215,7 @@ endif()
 # Browser product: a JSPI module (WiiCompiled.js + .wasm) for the page in web/site. The files a
 # native build copies beside the executable are embedded at /app (RuntimePlatform::
 # ExecutableDirectory() on the web). The aurora sqlite pipeline cache is off in the browser and
-# networking is compiled out, so neither the initial pipeline cache nor cacert.pem ships.
+# TLS is compiled out (plaintext WFC through the gateway), so neither the initial pipeline cache nor cacert.pem ships.
 function(mkw_configure_web_product target)
     set(web_dir "${MKW_RUNTIME_SOURCE_DIR}/../web")
     set(dsp_rom "${MKW_RUNTIME_SOURCE_DIR}/assets/dsp/dsp_coef.bin")

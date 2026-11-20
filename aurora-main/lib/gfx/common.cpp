@@ -496,7 +496,7 @@ static inline void push_command(CommandType type, const Command::Data& data) {
   if (!has_current_render_pass())
     UNLIKELY {
       if (should_log_dropped_work()) {
-        Log.warn("Dropping command {} without an active render pass", magic_enum::enum_name(type));
+        Log.debug("Dropping command {} without an active render pass", magic_enum::enum_name(type));
       }
       return;
     }

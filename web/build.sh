@@ -66,8 +66,8 @@ Options:
   --retro-rewind DIR    Also build Retro Rewind: DIR is the RetroRewind6 folder (it contains
                         Binaries/Code.pul) or a folder containing RetroRewind6/. Adds the
                         RetroRewind product, dist/mods/RetroRewind6 (+ manifest) and
-                        dist/products.json lists both products. Networking is compiled out of
-                        the web build, so no Retro-WFC payload is used.
+                        dist/products.json lists both products. Online play goes through the
+                        netgw gateway (no TLS in the web build, so no Retro-WFC payload is used).
   -h, --help            Show this help
 
 Environment:
@@ -380,6 +380,7 @@ step "Staging main.dol and StaticR.rel into Assets/ (git-ignored)"
 mkdir -p "$assets"
 cp -f "$work_disc/sys/main.dol" "$assets/main.dol"
 cp -f "$work_disc/files/rel/StaticR.rel" "$assets/StaticR.rel"
+python3 "$workspace/web/tools/patch_simpli_game.py" "$assets" "$project" || fail "SimpliConnection game patch failed"
 
 step "Building the translator"
 translator_dll=$workspace/translator/src/Translator.Cli/bin/Release/net8.0/Translator.Cli.dll
@@ -564,6 +565,8 @@ info "generating $DISC_MANIFEST_NAME"
 "$python_bin" "$manifest_tool" "$out_dir/disc" "$out_dir/$DISC_MANIFEST_NAME" \
     || fail "make_disc_manifest.py failed"
 [[ -s "$out_dir/$DISC_MANIFEST_NAME" ]] || fail "$DISC_MANIFEST_NAME was not written"
+info "renaming the Wi-Fi menu text to SimpliConnection"
+"$python_bin" "$workspace/web/tools/patch_simpli_ui.py" "$out_dir" || fail "patch_simpli_ui.py failed"
 
 # products.json tells the page which products this site holds (more than one shows a choice screen).
 products_json='[{"id":"WiiCompiled","title":"Mario Kart Wii","glue":"WiiCompiled.js"}'
