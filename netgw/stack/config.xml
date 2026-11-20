@@ -30,7 +30,7 @@
 
      <logLevel>4</logLevel>
      <logOutput>StdOut</logOutput>
-     <apiSecret>local-lan-only-secret</apiSecret>
+     <apiSecret>RANDOMIZED-BY-RUN-SH</apiSecret>
 
      <eventReporting>
           <logToDatabase>true</logToDatabase>

@@ -564,10 +564,17 @@ type tcpConn struct {
 
 func (t *tcpConn) close() { t.once.Do(func() { close(t.done) }) }
 
+const maxPerClient = 32 // TCP conns and UDP sockets each
+
 func (c *client) openTCP(id uint32, ip [4]byte, port uint16) {
 	tc := &tcpConn{out: make(chan []byte, 256), done: make(chan struct{})}
 	c.mu.Lock()
 	old := c.tcps[id]
+	if old == nil && len(c.tcps) >= maxPerClient { // cap fds per client
+		c.mu.Unlock()
+		c.send(tTCPOpened, id, []byte{24}) // EMFILE
+		return
+	}
 	c.tcps[id] = tc
 	c.mu.Unlock()
 	if old != nil {
@@ -677,10 +684,15 @@ func (c *client) bindUDP(id uint32, port uint16) {
 	g := c.g
 	c.mu.Lock()
 	_, exists := c.udps[id]
+	full := len(c.udps) >= maxPerClient
 	c.mu.Unlock()
 	reply := func(status byte, p uint16) { c.send(tUDPBound, id, []byte{status}, le16(p)) }
 	if exists {
 		reply(22, 0)
+		return
+	}
+	if full {
+		reply(24, 0) // EMFILE: cap sockets per client
 		return
 	}
 	s := &usock{c: c, id: id}

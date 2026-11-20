@@ -23,6 +23,8 @@ start() {
   [ -x "$HERE/wfc-server-bin" ] || build || exit 1
   if wfc_up; then echo "wfc-server already running (pid $(cat "$WFC_PID"))"; return; fi
   ln -sf ../../wfc-server/game_list.tsv "$HERE/game_list.tsv"   # server reads it from cwd
+  # per-start random admin API secret: the gateway forwards port 80 to this server, so a fixed secret would let players call /api/ban
+  sed -i.bak "s|<apiSecret>[^<]*</apiSecret>|<apiSecret>$(openssl rand -hex 16)</apiSecret>|" "$HERE/config.xml" && rm -f "$HERE/config.xml.bak"
   # cwd must be stack/ : the server reads ./config.xml and writes ./state
   cd "$HERE" && { nohup ./wfc-server-bin >>"$LOGS/wfc.log" 2>&1 & echo $! >"$WFC_PID"; }
   for _ in $(seq 1 50); do
