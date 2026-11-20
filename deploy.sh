@@ -5,6 +5,7 @@
 #                   ./deploy.sh up [invite-label]  start Postgres, wfc-server, gateway; prints the invite code
 #                   ./deploy.sh status | down
 # Env on `up`: PORT=8080  CERT=/path/cert.pem KEY=/path/key.pem (HTTPS; needed for non-localhost players)
+# Postgres uses trust auth on loopback + a 0700 socket dir: run this on a dedicated/single-user box.
 # dist/ holds Nintendo game data: keep the bundle private, never push it to a public host.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -33,16 +34,20 @@ install)
   bash "$STACK/run.sh" build
   echo "installed" ;;
 up)
+  [ -x "$GW/netgw-bin" ] && [ -x "$STACK/wfc-server-bin" ] || "$0" install
   bash "$STACK/run.sh" start
   if ! gw_up; then
     TLS=(); [ -n "${CERT:-}" ] && TLS=(--cert "$CERT" --key "$KEY" --https ":${HTTPS_PORT:-8443}")
-    (cd "$GW" && nohup ./netgw-bin --dir "$ROOT/web/dist" --http ":$PORT" --state ./state ${TLS[@]+"${TLS[@]}"} >>gw.log 2>&1 & echo $! >"$GWPID")
+    (cd "$GW" && exec nohup ./netgw-bin --dir "$ROOT/web/dist" --http ":$PORT" --state ./state ${TLS[@]+"${TLS[@]}"} >>gw.log 2>&1 </dev/null) &
+    echo $! >"$GWPID"
     sleep 1; gw_up || { echo "gateway failed; see $GW/gw.log"; exit 1; }
   fi
   LABEL="${2:-friends}"
   (cd "$GW" && ./netgw-bin invite --state ./state list | grep -q "$LABEL" || ./netgw-bin invite --state ./state add "$LABEL")
   (cd "$GW" && ./netgw-bin invite --state ./state list)
-  echo "open http://<this-host>:$PORT/?name=You&code=<invite>" ;;
+  if [ -n "${CERT:-}" ]; then echo "open https://<this-host>:${HTTPS_PORT:-8443}/?name=You&code=<invite>  (plain http :$PORT also serves the page: firewall it)"
+  else echo "open http://<this-host>:$PORT/?name=You&code=<invite>  (no TLS: LAN/VPN only; the invite code travels in clear)"; fi
+  echo "NOTE: the page and game files (/disc/) are served without login; only online play needs the invite. Keep the host on a LAN/VPN or behind an authenticating proxy." ;;
 down)
   gw_up && kill "$(cat "$GWPID")"; rm -f "$GWPID"
   bash "$STACK/run.sh" stop

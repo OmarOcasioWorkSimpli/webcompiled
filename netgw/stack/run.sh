@@ -20,9 +20,10 @@ wfc_up() { [ -f "$WFC_PID" ] && kill -0 "$(cat "$WFC_PID")" 2>/dev/null; }
 build() { (cd "$ROOT/wfc-server" && go build -o "$HERE/wfc-server-bin" .) ; }
 
 start() {
-  [ -d "$PGDATA" ] || "$PG/initdb" -D "$PGDATA" -A trust >/dev/null || exit 1
+  [ -d "$PGDATA" ] || "$PG/initdb" -D "$PGDATA" -U wfc -A trust >/dev/null || exit 1
+  mkdir -p "$LOCAL/sock" && chmod 700 "$LOCAL/sock"   # private unix socket dir (trust auth is loopback/owner-only)
   if ! pg_up; then
-    "$PG/pg_ctl" -D "$PGDATA" -l "$LOCAL/pg.log" -o "-p $PGPORT -k /tmp" -w start || exit 1
+    "$PG/pg_ctl" -D "$PGDATA" -l "$LOCAL/pg.log" -o "-p $PGPORT -k $LOCAL/sock" -w start || exit 1
   fi
   (cd "$HERE" && go run ./dbinit) || exit 1
   [ -x "$HERE/wfc-server-bin" ] || build || exit 1
